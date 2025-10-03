@@ -16,42 +16,51 @@ class ValifyService {
    * Get OAuth access token from Valify
    */
   async getAccessToken(): Promise<string> {
-    // Check if token is still valid
+    // Check if token is still valid (10 minutes validity, 3 uses max)
     if (this.accessToken && Date.now() < this.tokenExpiry) {
       return this.accessToken;
     }
 
+    const username = import.meta.env.VITE_VALIFY_USERNAME;
+    const password = import.meta.env.VITE_VALIFY_PASSWORD;
     const clientId = import.meta.env.VITE_VALIFY_CLIENT_ID;
     const clientSecret = import.meta.env.VITE_VALIFY_CLIENT_SECRET;
 
-    if (!clientId || !clientSecret) {
+    if (!username || !password || !clientId || !clientSecret) {
       throw new Error('Valify credentials not configured');
     }
 
-    const credentials = btoa(`${clientId}:${clientSecret}`);
     const api = APIConfig.getValifyInstance();
 
     try {
       const response = await api.post<ValifyOAuthResponse>(
-        '/o/token/',
+        '/api/o/token/',
         new URLSearchParams({
-          grant_type: 'client_credentials',
+          username: username,
+          password: password,
+          client_id: clientId,
+          client_secret: clientSecret,
+          grant_type: 'password',
         }),
         {
           headers: {
-            Authorization: `Basic ${credentials}`,
             'Content-Type': 'application/x-www-form-urlencoded',
           },
         }
       );
 
       this.accessToken = response.data.access_token;
-      // Set expiry to 5 minutes before actual expiry for safety
-      this.tokenExpiry = Date.now() + (response.data.expires_in - 300) * 1000;
+      // Token valid for 10 minutes (600 seconds)
+      // Set expiry to 9 minutes for safety (540 seconds)
+      this.tokenExpiry = Date.now() + 540000;
 
       return this.accessToken;
     } catch (error: any) {
       console.error('Failed to get Valify access token:', error);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+      }
       throw new Error('Failed to authenticate with Valify service');
     }
   }

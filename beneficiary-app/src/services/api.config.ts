@@ -48,7 +48,7 @@ export class APIConfig {
 
   static initializeValifyAPI(): AxiosInstance {
     this.valifyInstance = axios.create({
-      baseURL: import.meta.env.VITE_VALIFY_API_URL || 'https://api.valify.me',
+      baseURL: import.meta.env.VITE_VALIFY_API_URL || 'https://valifystage.com',
       timeout: 60000, // Longer timeout for image processing
       headers: {
         'Content-Type': 'application/json',
