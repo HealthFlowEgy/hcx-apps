@@ -1,472 +1,597 @@
-// ============================================================================
-// HCX PROTOCOL SERVICE
-// Complete implementation of HCX Protocol v0.9 APIs
-// Location: beneficiary-app-mobile/src/services/hcx.protocol.service.ts
-// ============================================================================
-
-import axios, { AxiosInstance } from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
 /**
  * HCX Protocol Service
- * 
- * Implements all HCX Protocol v0.9 endpoints for:
- * - Coverage Eligibility
- * - Claims Management
- * - Pre-Authorization
- * - Communication
- * - Notifications
- * - Status Checking
- * - Participant Registry
+ * Handles communication with HCX Gateway through BSP Backend
+ * Based on HCX Protocol v0.9 specifications
  */
-class HCXProtocolService {
-  private api: AxiosInstance;
-  private baseURL: string;
 
-  constructor() {
-    this.baseURL = process.env.HCX_API_URL || 'http://localhost:8082/api/v1';
-    
-    this.api = axios.create({
-      baseURL: this.baseURL,
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Alert } from 'react-native';
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
+export interface HCXConfig {
+  bspApiUrl: string;
+  hcxGatewayUrl: string;
+  participantCode: string;
+  apiKey?: string;
+  timeout?: number;
+}
+
+export interface AuthTokens {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  beneficiaryId: string;
+}
+
+export interface Policy {
+  id: string;
+  policyNumber: string;
+  insurerName: string;
+  insurerLogo?: string;
+  planName: string;
+  coverageAmount: number;
+  usedAmount: number;
+  status: 'active' | 'inactive' | 'expired' | 'suspended';
+  startDate: string;
+  endDate: string;
+  policyType: 'individual' | 'family' | 'group';
+  premiumAmount?: number;
+  members?: PolicyMember[];
+  benefits?: Benefit[];
+  networkProviders?: string[];
+}
+
+export interface PolicyMember {
+  id: string;
+  name: string;
+  relationship: string;
+  dateOfBirth: string;
+  gender: string;
+  membershipNumber: string;
+}
+
+export interface Benefit {
+  id: string;
+  category: string;
+  description: string;
+  coverageLimit: number;
+  copayPercentage?: number;
+  conditions?: string[];
+}
+
+export interface Claim {
+  id: string;
+  claimNumber: string;
+  policyId: string;
+  policyNumber: string;
+  insurerName: string;
+  providerName: string;
+  providerType: string;
+  status: 'submitted' | 'pending' | 'approved' | 'rejected' | 'settled' | 'processing';
+  claimType: 'cashless' | 'reimbursement';
+  treatmentType: 'opd' | 'ipd';
+  submissionDate: string;
+  treatmentDate: string;
+  claimedAmount: number;
+  approvedAmount?: number;
+  settledAmount?: number;
+  diagnosis?: string;
+  documents?: ClaimDocument[];
+  timeline?: ClaimTimeline[];
+  rejectionReason?: string;
+}
+
+export interface ClaimDocument {
+  id: string;
+  name: string;
+  type: string;
+  url: string;
+  uploadedAt: string;
+  size?: number;
+}
+
+export interface ClaimTimeline {
+  id: string;
+  status: string;
+  date: string;
+  description: string;
+  actor?: string;
+}
+
+export interface ConsentRequest {
+  id: string;
+  requesterId: string;
+  requesterName: string;
+  requesterType: 'provider' | 'payor' | 'researcher' | 'government';
+  purpose: string;
+  dataRequested: string[];
+  validFrom: string;
+  validTo: string;
+  status: 'pending' | 'approved' | 'rejected' | 'expired';
+  requestDate: string;
+  responseDate?: string;
+  description?: string;
+}
+
+export interface Notification {
+  id: string;
+  type: 'claim_update' | 'consent_request' | 'policy_update' | 'payment' | 'system';
+  title: string;
+  message: string;
+  timestamp: string;
+  read: boolean;
+  actionUrl?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface BeneficiaryProfile {
+  id: string;
+  nationalId: string;
+  phone: string;
+  name: string;
+  dateOfBirth: string;
+  gender: string;
+  email?: string;
+  address?: Address;
+  emergencyContact?: EmergencyContact;
+  profilePhoto?: string;
+}
+
+export interface Address {
+  street?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  country?: string;
+}
+
+export interface EmergencyContact {
+  name: string;
+  relationship: string;
+  phone: string;
+}
+
+export interface APIResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: {
+    code: string;
+    message: string;
+    details?: any;
+  };
+  timestamp: string;
+}
+
+// ============================================================================
+// HCX PROTOCOL SERVICE CLASS
+// ============================================================================
+
+class HCXProtocolService {
+  private config: HCXConfig;
+  private authTokens: AuthTokens | null = null;
+  private refreshTokenPromise: Promise<void> | null = null;
+
+  constructor(config: HCXConfig) {
+    this.config = {
       timeout: 30000,
-      headers: {
+      ...config,
+    };
+    this.loadTokens();
+  }
+
+  // ==========================================================================
+  // AUTHENTICATION & TOKEN MANAGEMENT
+  // ==========================================================================
+
+  private async loadTokens(): Promise<void> {
+    try {
+      const tokensJson = await AsyncStorage.getItem('hcx_auth_tokens');
+      if (tokensJson) {
+        this.authTokens = JSON.parse(tokensJson);
+      }
+    } catch (error) {
+      console.error('Error loading tokens:', error);
+    }
+  }
+
+  private async saveTokens(tokens: AuthTokens): Promise<void> {
+    try {
+      this.authTokens = tokens;
+      await AsyncStorage.setItem('hcx_auth_tokens', JSON.stringify(tokens));
+    } catch (error) {
+      console.error('Error saving tokens:', error);
+    }
+  }
+
+  private async clearTokens(): Promise<void> {
+    try {
+      this.authTokens = null;
+      await AsyncStorage.removeItem('hcx_auth_tokens');
+    } catch (error) {
+      console.error('Error clearing tokens:', error);
+    }
+  }
+
+  private isTokenExpired(): boolean {
+    if (!this.authTokens) return true;
+    return Date.now() >= this.authTokens.expiresAt;
+  }
+
+  private async refreshAccessToken(): Promise<void> {
+    if (this.refreshTokenPromise) {
+      return this.refreshTokenPromise;
+    }
+
+    this.refreshTokenPromise = (async () => {
+      try {
+        if (!this.authTokens?.refreshToken) {
+          throw new Error('No refresh token available');
+        }
+
+        const response = await fetch(`${this.config.bspApiUrl}/auth/refresh`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            refreshToken: this.authTokens.refreshToken,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Token refresh failed');
+        }
+
+        const data = await response.json();
+        await this.saveTokens(data.tokens);
+      } catch (error) {
+        await this.clearTokens();
+        throw error;
+      } finally {
+        this.refreshTokenPromise = null;
+      }
+    })();
+
+    return this.refreshTokenPromise;
+  }
+
+  // ==========================================================================
+  // HTTP REQUEST HANDLER
+  // ==========================================================================
+
+  private async request<T>(
+    endpoint: string,
+    options: RequestInit = {}
+  ): Promise<APIResponse<T>> {
+    try {
+      // Check if token needs refresh
+      if (this.isTokenExpired()) {
+        await this.refreshAccessToken();
+      }
+
+      const headers: HeadersInit = {
         'Content-Type': 'application/json',
-      },
+        ...options.headers,
+      };
+
+      if (this.authTokens?.accessToken) {
+        headers['Authorization'] = `Bearer ${this.authTokens.accessToken}`;
+      }
+
+      if (this.config.apiKey) {
+        headers['X-API-Key'] = this.config.apiKey;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.config.timeout!);
+
+      const response = await fetch(`${this.config.bspApiUrl}${endpoint}`, {
+        ...options,
+        headers,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        return {
+          success: false,
+          error: {
+            code: data.error?.code || `HTTP_${response.status}`,
+            message: data.error?.message || response.statusText,
+            details: data.error?.details,
+          },
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      return {
+        success: true,
+        data: data.data || data,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      console.error(`API Request Error [${endpoint}]:`, error);
+
+      return {
+        success: false,
+        error: {
+          code: error.name || 'NETWORK_ERROR',
+          message: error.message || 'Network request failed',
+          details: error,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  // ==========================================================================
+  // AUTHENTICATION APIs
+  // ==========================================================================
+
+  async login(phone: string, otp: string): Promise<APIResponse<AuthTokens>> {
+    const response = await this.request<AuthTokens>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ phone, otp }),
     });
 
-    // Request interceptor to add auth token
-    this.api.interceptors.request.use(
-      async (config) => {
-        const token = await AsyncStorage.getItem('authToken');
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
-        return config;
-      },
-      (error) => Promise.reject(error)
-    );
+    if (response.success && response.data) {
+      await this.saveTokens(response.data);
+    }
 
-    // Response interceptor for error handling
-    this.api.interceptors.response.use(
-      (response) => response,
-      async (error) => {
-        if (error.response?.status === 401) {
-          // Token expired, redirect to login
-          await AsyncStorage.removeItem('authToken');
-          await AsyncStorage.removeItem('beneficiaryData');
-        }
-        return Promise.reject(error);
-      }
-    );
+    return response;
   }
 
-  // ============================================================================
-  // COVERAGE ELIGIBILITY APIs
-  // ============================================================================
+  async register(kycData: {
+    nationalId: string;
+    phone: string;
+    name: string;
+    dateOfBirth: string;
+    idFrontImage: string;
+    idBackImage: string;
+    selfieImage: string;
+  }): Promise<APIResponse<{ beneficiaryId: string; eshicNumber: string }>> {
+    return this.request('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(kycData),
+    });
+  }
 
-  /**
-   * Check coverage eligibility
-   * @param data Eligibility check request data
-   */
-  async checkCoverageEligibility(data: {
-    providerId: string;
-    serviceType: string;
-    treatmentType?: string;
-    estimatedAmount?: number;
-  }) {
+  async logout(): Promise<void> {
     try {
-      const response = await this.api.post('/coverageeligibility/check', {
-        provider_id: data.providerId,
-        service_type: data.serviceType,
-        treatment_type: data.treatmentType,
-        estimated_amount: data.estimatedAmount,
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Coverage eligibility check failed:', error);
-      throw new Error(error.response?.data?.message || 'Failed to check eligibility');
+      await this.request('/auth/logout', { method: 'POST' });
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      await this.clearTokens();
     }
   }
 
-  /**
-   * Handle eligibility check response (callback)
-   * @param requestId Request ID to check status
-   */
-  async getEligibilityResponse(requestId: string) {
-    try {
-      const response = await this.api.get(`/coverageeligibility/status/${requestId}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('Failed to get eligibility response:', error);
-      throw new Error(error.response?.data?.message || 'Failed to get response');
-    }
+  async verifyPhone(phone: string): Promise<APIResponse<{ otpSent: boolean }>> {
+    return this.request('/auth/verify-phone', {
+      method: 'POST',
+      body: JSON.stringify({ phone }),
+    });
   }
 
-  // ============================================================================
-  // CLAIMS APIs
-  // ============================================================================
+  // ==========================================================================
+  // POLICY APIs
+  // ==========================================================================
 
-  /**
-   * Submit a new claim
-   * @param claimData Claim submission data
-   */
-  async submitClaim(claimData: {
-    policyId: string;
-    providerId: string;
-    treatmentType: string;
-    diagnosisCode: string;
-    claimAmount: number;
-    billDate: string;
-    documents: string[]; // Document IDs
-    items: Array<{
-      serviceName: string;
-      quantity: number;
-      unitPrice: number;
-      totalPrice: number;
-    }>;
-  }) {
-    try {
-      const response = await this.api.post('/claim/submit', {
-        policy_id: claimData.policyId,
-        provider_id: claimData.providerId,
-        treatment_type: claimData.treatmentType,
-        diagnosis_code: claimData.diagnosisCode,
-        claim_amount: claimData.claimAmount,
-        bill_date: claimData.billDate,
-        documents: claimData.documents,
-        items: claimData.items,
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Claim submission failed:', error);
-      throw new Error(error.response?.data?.message || 'Failed to submit claim');
-    }
+  async getPolicies(): Promise<APIResponse<Policy[]>> {
+    return this.request<Policy[]>('/beneficiary/policies');
   }
 
-  /**
-   * Get claim response/status
-   * @param claimId Claim ID
-   */
-  async getClaimResponse(claimId: string) {
-    try {
-      const response = await this.api.get(`/claim/status/${claimId}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('Failed to get claim response:', error);
-      throw new Error(error.response?.data?.message || 'Failed to get claim status');
-    }
+  async getPolicyDetails(policyId: string): Promise<APIResponse<Policy>> {
+    return this.request<Policy>(`/beneficiary/policies/${policyId}`);
   }
 
-  /**
-   * Get all claims for beneficiary
-   */
+  async searchPolicies(query: string): Promise<APIResponse<Policy[]>> {
+    return this.request<Policy[]>(`/beneficiary/policies/search?q=${encodeURIComponent(query)}`);
+  }
+
+  // ==========================================================================
+  // CLAIM APIs
+  // ==========================================================================
+
   async getClaims(filters?: {
     status?: string;
-    fromDate?: string;
-    toDate?: string;
-  }) {
-    try {
-      const response = await this.api.get('/claims', { params: filters });
-      return response.data;
-    } catch (error: any) {
-      console.error('Failed to get claims:', error);
-      throw new Error(error.response?.data?.message || 'Failed to fetch claims');
-    }
+    startDate?: string;
+    endDate?: string;
+  }): Promise<APIResponse<Claim[]>> {
+    const params = new URLSearchParams();
+    if (filters?.status) params.append('status', filters.status);
+    if (filters?.startDate) params.append('startDate', filters.startDate);
+    if (filters?.endDate) params.append('endDate', filters.endDate);
+
+    const queryString = params.toString();
+    const endpoint = queryString ? `/beneficiary/claims?${queryString}` : '/beneficiary/claims';
+
+    return this.request<Claim[]>(endpoint);
   }
 
-  /**
-   * Get claim details
-   * @param claimId Claim ID
-   */
-  async getClaimDetails(claimId: string) {
-    try {
-      const response = await this.api.get(`/claims/${claimId}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('Failed to get claim details:', error);
-      throw new Error(error.response?.data?.message || 'Failed to fetch claim details');
-    }
+  async getClaimDetails(claimId: string): Promise<APIResponse<Claim>> {
+    return this.request<Claim>(`/beneficiary/claims/${claimId}`);
   }
 
-  // ============================================================================
-  // PRE-AUTHORIZATION APIs
-  // ============================================================================
+  async getClaimDocuments(claimId: string): Promise<APIResponse<ClaimDocument[]>> {
+    return this.request<ClaimDocument[]>(`/beneficiary/claims/${claimId}/documents`);
+  }
 
-  /**
-   * Submit pre-authorization request
-   * @param preAuthData Pre-auth request data
-   */
-  async submitPreAuth(preAuthData: {
+  async downloadClaimDocument(documentId: string): Promise<APIResponse<{ url: string }>> {
+    return this.request<{ url: string }>(`/beneficiary/documents/${documentId}/download`);
+  }
+
+  // Optional: Submit reimbursement claim
+  async submitReimbursementClaim(claimData: {
     policyId: string;
     providerId: string;
-    treatmentType: string;
-    diagnosisCode: string;
-    estimatedAmount: number;
-    proposedDate: string;
-    documents: string[];
-  }) {
-    try {
-      const response = await this.api.post('/preauth/submit', {
-        policy_id: preAuthData.policyId,
-        provider_id: preAuthData.providerId,
-        treatment_type: preAuthData.treatmentType,
-        diagnosis_code: preAuthData.diagnosisCode,
-        estimated_amount: preAuthData.estimatedAmount,
-        proposed_date: preAuthData.proposedDate,
-        documents: preAuthData.documents,
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Pre-auth submission failed:', error);
-      throw new Error(error.response?.data?.message || 'Failed to submit pre-authorization');
-    }
+    treatmentDate: string;
+    diagnosis: string;
+    claimedAmount: number;
+    documents: string[]; // Document IDs
+  }): Promise<APIResponse<{ claimId: string }>> {
+    return this.request('/beneficiary/claims/submit', {
+      method: 'POST',
+      body: JSON.stringify(claimData),
+    });
   }
 
-  /**
-   * Get pre-auth response/status
-   * @param preAuthId Pre-auth ID
-   */
-  async getPreAuthResponse(preAuthId: string) {
-    try {
-      const response = await this.api.get(`/preauth/status/${preAuthId}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('Failed to get pre-auth response:', error);
-      throw new Error(error.response?.data?.message || 'Failed to get pre-auth status');
-    }
+  // ==========================================================================
+  // CONSENT APIs
+  // ==========================================================================
+
+  async getConsentRequests(status?: string): Promise<APIResponse<ConsentRequest[]>> {
+    const endpoint = status 
+      ? `/beneficiary/consents?status=${status}`
+      : '/beneficiary/consents';
+    return this.request<ConsentRequest[]>(endpoint);
   }
 
-  // ============================================================================
-  // COMMUNICATION APIs
-  // ============================================================================
-
-  /**
-   * Send communication/query request
-   * @param communicationData Communication data
-   */
-  async sendCommunication(communicationData: {
-    relatedTo: string; // claim_id or preauth_id
-    relatedType: 'claim' | 'preauth';
-    message: string;
-    recipientId: string;
-  }) {
-    try {
-      const response = await this.api.post('/communication/request', {
-        related_to: communicationData.relatedTo,
-        related_type: communicationData.relatedType,
-        message: communicationData.message,
-        recipient_id: communicationData.recipientId,
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Communication request failed:', error);
-      throw new Error(error.response?.data?.message || 'Failed to send communication');
-    }
+  async getConsentDetails(consentId: string): Promise<APIResponse<ConsentRequest>> {
+    return this.request<ConsentRequest>(`/beneficiary/consents/${consentId}`);
   }
 
-  /**
-   * Get communication response
-   * @param communicationId Communication ID
-   */
-  async getCommunicationResponse(communicationId: string) {
-    try {
-      const response = await this.api.get(`/communication/${communicationId}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('Failed to get communication:', error);
-      throw new Error(error.response?.data?.message || 'Failed to fetch communication');
-    }
+  async approveConsent(consentId: string): Promise<APIResponse<{ success: boolean }>> {
+    return this.request(`/beneficiary/consents/${consentId}/approve`, {
+      method: 'POST',
+    });
   }
 
-  // ============================================================================
+  async rejectConsent(
+    consentId: string,
+    reason?: string
+  ): Promise<APIResponse<{ success: boolean }>> {
+    return this.request(`/beneficiary/consents/${consentId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  // ==========================================================================
   // NOTIFICATION APIs
-  // ============================================================================
+  // ==========================================================================
 
-  /**
-   * Subscribe to notifications
-   * @param topics Topics to subscribe to
-   */
-  async subscribeToNotifications(topics: string[]) {
-    try {
-      const response = await this.api.post('/notification/subscribe', {
-        topics,
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Notification subscription failed:', error);
-      throw new Error(error.response?.data?.message || 'Failed to subscribe to notifications');
-    }
+  async subscribeToNotifications(
+    fcmToken: string
+  ): Promise<APIResponse<{ subscribed: boolean }>> {
+    return this.request('/beneficiary/notifications/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({ fcmToken }),
+    });
   }
 
-  /**
-   * Unsubscribe from notifications
-   * @param topics Topics to unsubscribe from
-   */
-  async unsubscribeFromNotifications(topics: string[]) {
-    try {
-      const response = await this.api.post('/notification/unsubscribe', {
-        topics,
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Notification unsubscribe failed:', error);
-      throw new Error(error.response?.data?.message || 'Failed to unsubscribe');
-    }
+  async getNotifications(
+    unreadOnly: boolean = false
+  ): Promise<APIResponse<Notification[]>> {
+    const endpoint = unreadOnly
+      ? '/beneficiary/notifications?unread=true'
+      : '/beneficiary/notifications';
+    return this.request<Notification[]>(endpoint);
   }
 
-  /**
-   * Get notification subscriptions
-   */
-  async getNotificationSubscriptions() {
-    try {
-      const response = await this.api.get('/notification/subscription/list');
-      return response.data;
-    } catch (error: any) {
-      console.error('Failed to get subscriptions:', error);
-      throw new Error(error.response?.data?.message || 'Failed to fetch subscriptions');
-    }
+  async markNotificationAsRead(notificationId: string): Promise<APIResponse<void>> {
+    return this.request(`/beneficiary/notifications/${notificationId}/read`, {
+      method: 'POST',
+    });
   }
 
-  /**
-   * Get available notification topics
-   */
-  async getNotificationTopics() {
-    try {
-      const response = await this.api.get('/notification/topic/list');
-      return response.data;
-    } catch (error: any) {
-      console.error('Failed to get topics:', error);
-      throw new Error(error.response?.data?.message || 'Failed to fetch topics');
-    }
+  async markAllNotificationsAsRead(): Promise<APIResponse<void>> {
+    return this.request('/beneficiary/notifications/read-all', {
+      method: 'POST',
+    });
   }
 
-  /**
-   * Update notification subscription
-   * @param subscriptionId Subscription ID
-   * @param enabled Enable/disable subscription
-   */
-  async updateNotificationSubscription(subscriptionId: string, enabled: boolean) {
-    try {
-      const response = await this.api.post('/notification/subscription/update', {
-        subscription_id: subscriptionId,
-        enabled,
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Failed to update subscription:', error);
-      throw new Error(error.response?.data?.message || 'Failed to update subscription');
-    }
+  // ==========================================================================
+  // PROFILE APIs
+  // ==========================================================================
+
+  async getProfile(): Promise<APIResponse<BeneficiaryProfile>> {
+    return this.request<BeneficiaryProfile>('/beneficiary/profile');
   }
 
-  // ============================================================================
-  // STATUS & SEARCH APIs
-  // ============================================================================
-
-  /**
-   * Check status of any HCX request
-   * @param requestId Request ID
-   */
-  async checkStatus(requestId: string) {
-    try {
-      const response = await this.api.get(`/hcx/status/${requestId}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('Status check failed:', error);
-      throw new Error(error.response?.data?.message || 'Failed to check status');
-    }
+  async updateProfile(updates: Partial<BeneficiaryProfile>): Promise<APIResponse<BeneficiaryProfile>> {
+    return this.request<BeneficiaryProfile>('/beneficiary/profile', {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
   }
 
-  /**
-   * Search participants (providers, payors)
-   * @param filters Search filters
-   */
-  async searchParticipants(filters: {
-    participantType?: 'provider' | 'payor';
-    name?: string;
-    location?: string;
-    specialty?: string;
-  }) {
-    try {
-      const response = await this.api.post('/participant/search', filters);
-      return response.data;
-    } catch (error: any) {
-      console.error('Participant search failed:', error);
-      throw new Error(error.response?.data?.message || 'Failed to search participants');
-    }
+  async updatePassword(
+    currentPassword: string,
+    newPassword: string
+  ): Promise<APIResponse<{ success: boolean }>> {
+    return this.request('/beneficiary/profile/password', {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
   }
 
-  /**
-   * Get participant details
-   * @param participantCode Participant code
-   */
-  async getParticipantDetails(participantCode: string) {
-    try {
-      const response = await this.api.get(`/participant/${participantCode}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('Failed to get participant details:', error);
-      throw new Error(error.response?.data?.message || 'Failed to fetch participant');
-    }
+  async uploadProfilePhoto(imageBase64: string): Promise<APIResponse<{ url: string }>> {
+    return this.request('/beneficiary/profile/photo', {
+      method: 'POST',
+      body: JSON.stringify({ image: imageBase64 }),
+    });
   }
 
-  // ============================================================================
-  // DOCUMENT MANAGEMENT
-  // ============================================================================
+  // ==========================================================================
+  // ESHIC CARD API
+  // ==========================================================================
 
-  /**
-   * Upload document
-   * @param file File to upload
-   * @param metadata Document metadata
-   */
-  async uploadDocument(file: {
-    uri: string;
-    type: string;
-    name: string;
-  }, metadata: {
-    documentType: string;
-    relatedTo?: string;
-    relatedType?: string;
-  }) {
-    try {
-      const formData = new FormData();
-      formData.append('file', {
-        uri: file.uri,
-        type: file.type,
-        name: file.name,
-      } as any);
-      formData.append('document_type', metadata.documentType);
-      if (metadata.relatedTo) {
-        formData.append('related_to', metadata.relatedTo);
-      }
-      if (metadata.relatedType) {
-        formData.append('related_type', metadata.relatedType);
-      }
-
-      const response = await this.api.post('/documents/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Document upload failed:', error);
-      throw new Error(error.response?.data?.message || 'Failed to upload document');
-    }
+  async getESHICCard(): Promise<APIResponse<{
+    cardNumber: string;
+    memberName: string;
+    membershipId: string;
+    validFrom: string;
+    validTo: string;
+    qrCode: string;
+    insurerInfo: {
+      name: string;
+      phone: string;
+      email: string;
+    };
+  }>> {
+    return this.request('/beneficiary/eshic-card');
   }
 
-  /**
-   * Get document
-   * @param documentId Document ID
-   */
-  async getDocument(documentId: string) {
-    try {
-      const response = await this.api.get(`/documents/${documentId}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('Failed to get document:', error);
-      throw new Error(error.response?.data?.message || 'Failed to fetch document');
-    }
+  // ==========================================================================
+  // UTILITY METHODS
+  // ==========================================================================
+
+  isAuthenticated(): boolean {
+    return this.authTokens !== null && !this.isTokenExpired();
+  }
+
+  getBeneficiaryId(): string | null {
+    return this.authTokens?.beneficiaryId || null;
+  }
+
+  updateConfig(config: Partial<HCXConfig>): void {
+    this.config = { ...this.config, ...config };
   }
 }
 
-export default new HCXProtocolService();
+// ============================================================================
+// SINGLETON INSTANCE
+// ============================================================================
+
+// Will be initialized with actual config from environment
+let hcxServiceInstance: HCXProtocolService | null = null;
+
+export const initializeHCXService = (config: HCXConfig): void => {
+  hcxServiceInstance = new HCXProtocolService(config);
+};
+
+export const getHCXService = (): HCXProtocolService => {
+  if (!hcxServiceInstance) {
+    throw new Error('HCX Service not initialized. Call initializeHCXService first.');
+  }
+  return hcxServiceInstance;
+};
+
+export default HCXProtocolService;
