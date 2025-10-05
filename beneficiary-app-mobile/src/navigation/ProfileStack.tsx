@@ -1,18 +1,16 @@
 import React from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 import { ProfileStackParamList } from './types';
-import { View, Text } from 'react-native';
+import ProfileScreen from '../screens/profile/ProfileScreen';
+import EditProfileScreen from '../screens/profile/EditProfileScreen';
+import NotificationSettingsScreen from '../screens/profile/NotificationSettingsScreen';
+import LanguageSettingsScreen from '../screens/profile/LanguageSettingsScreen';
 
 const Stack = createStackNavigator<ProfileStackParamList>();
 
-const ProfileScreen = () => <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><Text>Profile</Text></View>;
-const EditProfileScreen = () => <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><Text>Edit Profile</Text></View>;
-const NotificationSettingsScreen = () => <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><Text>Notifications</Text></View>;
-const LanguageSettingsScreen = () => <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><Text>Language</Text></View>;
-
 export const ProfileStack: React.FC = () => {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: true, headerStyle: { backgroundColor: '#007AFF' }, headerTintColor: '#fff' }}>
+    <Stack.Navigator screenOptions={{ headerShown: true, headerStyle: { backgroundColor: '#007AFF' }, headerTintColor: '#fff', headerTitleStyle: { fontWeight: 'bold' } }}>
       <Stack.Screen name="ProfileScreen" component={ProfileScreen} options={{ title: 'الملف الشخصي' }} />
       <Stack.Screen name="EditProfile" component={EditProfileScreen} options={{ title: 'تعديل الملف' }} />
       <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ title: 'الإشعارات' }} />
