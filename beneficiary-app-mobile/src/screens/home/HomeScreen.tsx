@@ -16,8 +16,8 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { getHCXService } from '../services/hcx.protocol.service';
-import type { Policy, Claim, ConsentRequest } from '../services/hcx.protocol.service';
+import { getHCXService } from '../../services/hcx.protocol.service';
+import type { Policy, Claim, ConsentRequest } from '../../services/hcx.protocol.service';
 
 type HomeScreenNavigationProp = NativeStackNavigationProp<any>;
 
@@ -486,3 +486,101 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 12,
     shadowColor: '#000',
+  },
+  claimHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  claimNumber: {
+    fontSize: 16,
+    fontFamily: 'Cairo-SemiBold',
+    color: '#1976D2',
+  },
+  statusBadge: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+  },
+  statusText: {
+    fontSize: 12,
+    fontFamily: 'Cairo-SemiBold',
+    color: '#FFF',
+  },
+  claimProvider: {
+    fontSize: 14,
+    fontFamily: 'Cairo-Regular',
+    color: '#666',
+    marginBottom: 12,
+  },
+  claimFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  claimDate: {
+    fontSize: 12,
+    fontFamily: 'Cairo-Regular',
+    color: '#999',
+  },
+  claimAmount: {
+    fontSize: 14,
+    fontFamily: 'Cairo-Regular',
+    color: '#666',
+  },
+    emptyState: {
+      backgroundColor: '#FFF',
+      borderRadius: 12,
+      padding: 24,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: 8,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05,
+      shadowRadius: 4,
+      elevation: 2,
+    },
+    emptyStateText: {
+      fontSize: 16,
+      fontFamily: 'Cairo-Regular',
+      color: '#999',
+      textAlign: 'center',
+    },
+    helpCard: {
+      backgroundColor: '#FFF',
+      borderRadius: 12,
+      padding: 24,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: 8,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05,
+      shadowRadius: 4,
+      elevation: 2,
+    },
+    helpIcon: {
+      fontSize: 32,
+      marginBottom: 12,
+    },
+    helpText: {
+      fontSize: 16,
+      fontFamily: 'Cairo-Regular',
+      color: '#333',
+      textAlign: 'center',
+      marginBottom: 16,
+    },
+    helpButton: {
+      backgroundColor: '#1976D2',
+      borderRadius: 8,
+      paddingVertical: 10,
+      paddingHorizontal: 24,
+      marginTop: 8,
+    },
+    helpButtonText: {
+      color: '#FFF',
+      fontFamily: 'Cairo-Bold',
+      fontSize: 16,
+    },
+  },)
